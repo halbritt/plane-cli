@@ -9,13 +9,33 @@ Built against the API surface of **Plane v1.3.1**, derived from the
 version-matched apiserver source (`apps/api/plane/api/`), not from docs.
 See `LIMITATIONS.md` for what the public API cannot do.
 
-## Install
+## Install & deploy
 
 ```sh
-cd ~/git/plane-cli
-go build -o plane .
-install -m 0755 plane ~/.local/bin/plane   # or anywhere on PATH
+make build            # version-stamped ./plane
+make test check       # unit tests, go vet, gofmt
+make install          # → ~/.local/bin/plane   (PREFIX=... to change)
 ```
+
+Full local deployment — installs the binary **and** generates
+`~/.config/plane-cli/config.toml` plus a 0600 key file from an existing
+`KEY=value` env file, so `plane` works for any shell, agent, or systemd
+unit without sourcing anything:
+
+```sh
+scripts/deploy.sh --from-env ~/.config/plane/proximal-mcp.env
+# or: make deploy   (uses that default path)
+```
+
+The script is idempotent (re-run to refresh key/config after rotation),
+refuses to clobber a hand-written config without `--force`, never prints
+the key, and finishes by verifying `plane me` against the live instance
+using only the generated config. Upgrades are `git pull && make deploy`.
+
+Releases: pushing a `v*` tag builds linux amd64/arm64 + darwin arm64
+tarballs and attaches them to a GitHub release (`.github/workflows/`).
+`plane version` reports the stamped version, commit, and the Plane API
+release the binary targets.
 
 ## Output contract
 

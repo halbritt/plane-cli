@@ -53,6 +53,7 @@ func NewRoot(a *App) *cobra.Command {
 		Use:           "plane",
 		Short:         "JSON-first CLI for the Plane public REST API",
 		Long:          rootLong,
+		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -73,6 +74,7 @@ func NewRoot(a *App) *cobra.Command {
 	pf.IntVar(&a.flagMaxRetries, "max-retries", 4, "retry attempts after the first try (429/5xx/network)")
 
 	root.AddCommand(
+		newVersionCmd(a),
 		newMeCmd(a),
 		newWorkspaceCmd(a),
 		newProjectCmd(a),
