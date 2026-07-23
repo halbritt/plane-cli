@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -89,7 +90,7 @@ func NewRoot(a *App) *cobra.Command {
 
 // Main runs the CLI and returns the process exit code.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
-	a := &App{Stdout: stdout, Stderr: stderr, Getenv: getenv}
+	a := &App{Stdout: stdout, Stderr: stderr, Stdin: os.Stdin, Getenv: getenv}
 	root := NewRoot(a)
 	root.SetArgs(args)
 	err := root.ExecuteContext(ctx)

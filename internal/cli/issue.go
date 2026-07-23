@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 
@@ -300,7 +299,7 @@ Examples:
 				if args[0] != "-" {
 					return a.usageErr("the only positional argument accepted is \"-\" (bulk stdin mode)")
 				}
-				return a.runBulk(os.Stdin, func(line map[string]any) (json.RawMessage, error) {
+				return a.runBulk(a.Stdin, func(line map[string]any) (json.RawMessage, error) {
 					resp, err := cl.Do(ctx, http.MethodPost, path, nil, line)
 					if err != nil {
 						return nil, err
@@ -348,7 +347,7 @@ Examples:
 			}
 
 			if args[0] == "-" {
-				return a.runBulk(os.Stdin, func(line map[string]any) (json.RawMessage, error) {
+				return a.runBulk(a.Stdin, func(line map[string]any) (json.RawMessage, error) {
 					ref, _ := line["issue"].(string)
 					if ref == "" {
 						return nil, &usageError{msg: `each line needs an "issue" key (UUID or PROJ-123)`}

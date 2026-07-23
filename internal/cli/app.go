@@ -21,6 +21,7 @@ import (
 type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	Stdin  io.Reader
 	Getenv func(string) string
 
 	flagBaseURL     string
