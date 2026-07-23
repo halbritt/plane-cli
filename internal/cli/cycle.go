@@ -98,7 +98,9 @@ Examples:
 			if err != nil {
 				return a.fail(err)
 			}
-			fields := map[string]any{"name": cName}
+			// v1.3.1 quirk: CycleCreateSerializer.validate reads project_id
+			// from the request body, not the URL.
+			fields := map[string]any{"name": cName, "project_id": pid}
 			if cDescription != "" {
 				fields["description"] = cDescription
 			}
