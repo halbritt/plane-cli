@@ -27,6 +27,7 @@ type App struct {
 	flagBaseURL     string
 	flagWorkspace   string
 	flagProject     string
+	flagInstance    string
 	flagAPIKeyFile  string
 	flagConfig      string
 	flagDebug       bool
@@ -54,6 +55,7 @@ func (a *App) Config() (*config.Config, error) {
 		BaseURL:    a.flagBaseURL,
 		Workspace:  a.flagWorkspace,
 		Project:    a.flagProject,
+		Instance:   a.flagInstance,
 		APIKeyFile: a.flagAPIKeyFile,
 		ConfigPath: a.flagConfig,
 	}, a.Getenv)

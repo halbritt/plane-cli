@@ -37,7 +37,14 @@ Configuration (precedence: flags > environment > config file):
                       over PLANE_API_KEY when both are set)
   PLANE_WORKSPACE     workspace slug
   PLANE_PROJECT       default project (name, identifier, or UUID)
+  PLANE_INSTANCE      named instance (--instance) from config.toml
   PLANE_CONFIG        config file path (default ~/.config/plane-cli/config.toml)
+
+Instances: the config file may define one [instance.<name>] stanza per Plane
+deployment (base_url/workspace/api_key_file), plus default_instance for the
+one used when no --instance/PLANE_INSTANCE is given. A
+[project_overrides."<project>"] stanza may set instance = "<name>" to route
+that project to an instance automatically when -p selects it.
 
 The API key is never accepted as a command-line argument.
 
@@ -65,6 +72,7 @@ func NewRoot(a *App) *cobra.Command {
 	pf.StringVar(&a.flagBaseURL, "base-url", "", "Plane base URL (env PLANE_BASE_URL)")
 	pf.StringVarP(&a.flagWorkspace, "workspace", "w", "", "workspace slug (env PLANE_WORKSPACE)")
 	pf.StringVarP(&a.flagProject, "project", "p", "", "project name, identifier, or UUID (env PLANE_PROJECT)")
+	pf.StringVarP(&a.flagInstance, "instance", "i", "", "named instance from config.toml (env PLANE_INSTANCE)")
 	pf.StringVar(&a.flagAPIKeyFile, "api-key-file", "", "file containing the API key (env PLANE_API_KEY_FILE)")
 	pf.StringVar(&a.flagConfig, "config", "", "config file path (default ~/.config/plane-cli/config.toml)")
 	pf.BoolVar(&a.flagDebug, "debug", false, "trace requests/responses to stderr (API key redacted)")

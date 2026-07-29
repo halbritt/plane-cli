@@ -146,3 +146,125 @@ func TestBaseURLTrailingSlashTrimmed(t *testing.T) {
 		t.Errorf("BaseURL = %q", cfg.BaseURL)
 	}
 }
+
+const twoInstanceConfig = `
+default_instance = "work"
+
+[instance.work]
+base_url = "https://work.example"
+workspace = "work-ws"
+api_key = "work-key"
+
+[instance.personal]
+base_url = "https://personal.example"
+workspace = "personal-ws"
+api_key = "personal-key"
+
+[project_overrides."Side Project"]
+instance = "personal"
+`
+
+func TestInstanceDefaultApplies(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeFile(t, dir, "config.toml", twoInstanceConfig)
+	cfg, err := Load(Flags{ConfigPath: cfgPath}, envMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://work.example" || cfg.Workspace != "work-ws" || cfg.APIKey() != "work-key" {
+		t.Errorf("default instance not applied: %s %s %s", cfg.BaseURL, cfg.Workspace, cfg.APIKey())
+	}
+	if cfg.Instance != "work" {
+		t.Errorf("Instance = %q, want work", cfg.Instance)
+	}
+}
+
+func TestInstanceSelectedByFlagAndEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeFile(t, dir, "config.toml", twoInstanceConfig)
+
+	cfg, err := Load(Flags{Instance: "PERSONAL", ConfigPath: cfgPath}, envMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://personal.example" || cfg.APIKey() != "personal-key" {
+		t.Errorf("flag-selected instance not applied: %s %s", cfg.BaseURL, cfg.APIKey())
+	}
+
+	cfg, err = Load(Flags{ConfigPath: cfgPath}, envMap(map[string]string{"PLANE_INSTANCE": "personal"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Workspace != "personal-ws" {
+		t.Errorf("env-selected instance not applied: %s", cfg.Workspace)
+	}
+}
+
+func TestInstanceUnknownIsConfigError(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeFile(t, dir, "config.toml", twoInstanceConfig)
+	_, err := Load(Flags{Instance: "nope", ConfigPath: cfgPath}, envMap(nil))
+	if _, ok := err.(*ConfigError); !ok {
+		t.Fatalf("err = %v, want ConfigError", err)
+	}
+}
+
+func TestProjectOverrideRoutesToInstance(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeFile(t, dir, "config.toml", twoInstanceConfig)
+
+	// Override routes Side Project to the personal instance.
+	cfg, err := Load(Flags{Project: "side project", ConfigPath: cfgPath}, envMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://personal.example" || cfg.APIKey() != "personal-key" {
+		t.Errorf("override routing not applied: %s %s", cfg.BaseURL, cfg.APIKey())
+	}
+
+	// An explicit --instance beats (and fully disables) the override routing.
+	cfg, err = Load(Flags{Project: "side project", Instance: "work", ConfigPath: cfgPath}, envMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://work.example" || cfg.APIKey() != "work-key" {
+		t.Errorf("explicit instance should win: %s %s", cfg.BaseURL, cfg.APIKey())
+	}
+}
+
+func TestInstanceLayeringWithTopLevelAndOverride(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := writeFile(t, dir, "inst-key", "inst-file-key\n")
+	cfgPath := writeFile(t, dir, "config.toml", `
+base_url = "https://top.example"
+workspace = "top-ws"
+api_key = "top-key"
+default_instance = "work"
+
+[instance.work]
+base_url = "https://work.example"
+api_key_file = "`+keyPath+`"
+
+[project_overrides."Side Project"]
+workspace = "side-ws"
+api_key = "side-key"
+`)
+	// Instance fills base_url and key; top-level fills workspace.
+	cfg, err := Load(Flags{ConfigPath: cfgPath}, envMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://work.example" || cfg.Workspace != "top-ws" || cfg.APIKey() != "inst-file-key" {
+		t.Errorf("layering wrong: %s %s %s", cfg.BaseURL, cfg.Workspace, cfg.APIKey())
+	}
+
+	// Override layer beats the instance layer, including for key material
+	// (its inline api_key wins over the instance's api_key_file).
+	cfg, err = Load(Flags{Project: "Side Project", ConfigPath: cfgPath}, envMap(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Workspace != "side-ws" || cfg.APIKey() != "side-key" {
+		t.Errorf("override layer wrong: %s %s", cfg.Workspace, cfg.APIKey())
+	}
+}

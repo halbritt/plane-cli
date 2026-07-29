@@ -1,6 +1,11 @@
 // Package config resolves plane-cli configuration with the precedence
 // flags > environment > config file (~/.config/plane-cli/config.toml).
 //
+// The config file may define named connection profiles ([instance.<name>]
+// stanzas) for talking to more than one Plane deployment; --instance /
+// PLANE_INSTANCE selects one, default_instance applies otherwise, and a
+// project override can route a project to an instance.
+//
 // The API key is never accepted via argv; it comes from PLANE_API_KEY,
 // PLANE_API_KEY_FILE / --api-key-file (systemd LoadCredential-friendly),
 // or the config file. Within one precedence tier a key file wins over an
@@ -12,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -25,12 +31,32 @@ type File struct {
 	APIKey     string `toml:"api_key"`
 	APIKeyFile string `toml:"api_key_file"`
 
+	// DefaultInstance names the [instance.*] stanza used when neither
+	// --instance nor PLANE_INSTANCE selects one.
+	DefaultInstance string `toml:"default_instance"`
+
+	// Instances are named connection profiles ([instance.<name>]); the
+	// selected one supplies base_url/workspace/key ahead of the top-level
+	// file values.
+	Instances map[string]Instance `toml:"instance"`
+
 	// ProjectOverrides applies extra settings when the selected project
 	// (after flag/env resolution) matches a key, case-insensitively.
 	ProjectOverrides map[string]Override `toml:"project_overrides"`
 }
 
+type Instance struct {
+	BaseURL    string `toml:"base_url"`
+	Workspace  string `toml:"workspace"`
+	APIKey     string `toml:"api_key"`
+	APIKeyFile string `toml:"api_key_file"`
+}
+
 type Override struct {
+	// Instance routes the project to a named [instance.*] stanza. Ignored
+	// when --instance/PLANE_INSTANCE picked one explicitly.
+	Instance string `toml:"instance"`
+
 	BaseURL    string `toml:"base_url"`
 	Workspace  string `toml:"workspace"`
 	APIKey     string `toml:"api_key"`
@@ -43,6 +69,7 @@ type Flags struct {
 	BaseURL    string
 	Workspace  string
 	Project    string
+	Instance   string
 	APIKeyFile string
 	ConfigPath string
 }
@@ -52,6 +79,7 @@ type Config struct {
 	BaseURL   string
 	Workspace string
 	Project   string // project name, identifier, or UUID; resolved lazily per command
+	Instance  string // canonical name of the selected [instance.*] stanza, if any
 
 	apiKey string
 }
@@ -106,7 +134,7 @@ func Load(fl Flags, getenv func(string) string) (*Config, error) {
 	cfg := &Config{}
 	cfg.Project = pick(fl.Project, getenv("PLANE_PROJECT"), f.Project)
 
-	// Apply a per-project override as an extra "file" layer.
+	// Per-project override; may route to a named instance.
 	ov := Override{}
 	if cfg.Project != "" {
 		for name, o := range f.ProjectOverrides {
@@ -116,15 +144,49 @@ func Load(fl Flags, getenv func(string) string) (*Config, error) {
 			}
 		}
 	}
-	fileBase := firstNonEmpty(ov.BaseURL, f.BaseURL)
-	fileWS := firstNonEmpty(ov.Workspace, f.Workspace)
-	fileKey := firstNonEmpty(ov.APIKey, f.APIKey)
-	fileKeyFile := firstNonEmpty(ov.APIKeyFile, f.APIKeyFile)
+
+	// Select the instance: explicit flag/env beats a project override's
+	// routing, which beats default_instance. An override that routes to a
+	// different instance than an explicit selection is ignored entirely —
+	// its remaining fields were written for the instance it names.
+	instName := firstNonEmpty(fl.Instance, getenv("PLANE_INSTANCE"))
+	explicit := instName != ""
+	if !explicit {
+		instName = firstNonEmpty(ov.Instance, f.DefaultInstance)
+	}
+	if explicit && ov.Instance != "" && !strings.EqualFold(ov.Instance, instName) {
+		ov = Override{}
+	}
+	inst := Instance{}
+	if instName != "" {
+		found := false
+		for name, i := range f.Instances {
+			if strings.EqualFold(name, instName) {
+				inst, found = i, true
+				cfg.Instance = name
+				break
+			}
+		}
+		if !found {
+			return nil, &ConfigError{Msg: fmt.Sprintf(
+				"instance %q not defined in config file (available: %s)",
+				instName, strings.Join(instanceNames(f.Instances), ", "))}
+		}
+	}
+
+	// File tier layering, strongest first: project override > instance >
+	// top-level keys.
+	fileBase := firstNonEmpty(ov.BaseURL, inst.BaseURL, f.BaseURL)
+	fileWS := firstNonEmpty(ov.Workspace, inst.Workspace, f.Workspace)
 
 	cfg.BaseURL = strings.TrimRight(pick(fl.BaseURL, getenv("PLANE_BASE_URL"), fileBase), "/")
 	cfg.Workspace = pick(fl.Workspace, getenv("PLANE_WORKSPACE"), fileWS)
 
-	key, err := resolveKey(fl.APIKeyFile, getenv, fileKey, fileKeyFile)
+	key, err := resolveKey(fl.APIKeyFile, getenv, []keySource{
+		{ov.APIKey, ov.APIKeyFile},
+		{inst.APIKey, inst.APIKeyFile},
+		{f.APIKey, f.APIKeyFile},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -132,8 +194,23 @@ func Load(fl Flags, getenv func(string) string) (*Config, error) {
 	return cfg, nil
 }
 
-func resolveKey(flagKeyFile string, getenv func(string) string, fileKey, fileKeyFile string) (string, error) {
-	// flags > env > config file; within a tier, key file > inline key.
+func instanceNames(m map[string]Instance) []string {
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return []string{"none"}
+	}
+	return names
+}
+
+// keySource is one file-tier layer's key material.
+type keySource struct{ key, file string }
+
+func resolveKey(flagKeyFile string, getenv func(string) string, fileLayers []keySource) (string, error) {
+	// flags > env > config file layers; within a layer, key file > inline key.
 	if flagKeyFile != "" {
 		return readKeyFile(flagKeyFile)
 	}
@@ -143,16 +220,23 @@ func resolveKey(flagKeyFile string, getenv func(string) string, fileKey, fileKey
 	if k := getenv("PLANE_API_KEY"); k != "" {
 		return strings.TrimSpace(k), nil
 	}
-	if fileKeyFile != "" {
-		return readKeyFile(fileKeyFile)
-	}
-	if fileKey != "" {
-		return strings.TrimSpace(fileKey), nil
+	for _, l := range fileLayers {
+		if l.file != "" {
+			return readKeyFile(l.file)
+		}
+		if l.key != "" {
+			return strings.TrimSpace(l.key), nil
+		}
 	}
 	return "", nil
 }
 
 func readKeyFile(path string) (string, error) {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, path[2:])
+		}
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", &ConfigError{Msg: fmt.Sprintf("api key file: %v", err)}
@@ -182,9 +266,11 @@ func (c *Config) Validate(needWorkspace bool) error {
 	return nil
 }
 
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
 	}
-	return b
+	return ""
 }

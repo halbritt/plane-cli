@@ -79,6 +79,7 @@ Precedence: **flags > environment > config file**.
 | `PLANE_API_KEY_FILE` | path to a file containing the key (trailing whitespace stripped); wins over `PLANE_API_KEY` |
 | `PLANE_WORKSPACE` | workspace slug |
 | `PLANE_PROJECT` | default project (name, identifier, or UUID) |
+| `PLANE_INSTANCE` | named instance (`--instance`) from config.toml |
 | `PLANE_CONFIG` | config file path override |
 
 The API key is **never** accepted as a command-line argument and never
@@ -97,6 +98,37 @@ api_key_file = "/etc/plane-cli/key"   # prefer over inline api_key
 [project_overrides."Side Project"]
 workspace = "other-workspace"
 ```
+
+### Multiple Plane instances
+
+Talking to more than one Plane deployment? Define one `[instance.<name>]`
+stanza per deployment and pick with `--instance <name>` (`-i`) or
+`PLANE_INSTANCE`; `default_instance` applies when neither is given:
+
+```toml
+default_instance = "work"
+
+[instance.work]
+base_url     = "https://plane.internal.example"
+workspace    = "eng"
+api_key_file = "~/.config/plane-cli/key-work"
+
+[instance.personal]
+base_url     = "https://plane.personal.example"
+workspace    = "me"
+api_key_file = "~/.config/plane-cli/key-personal"
+
+# Route a project to an instance so `-p sideproj` needs no --instance:
+[project_overrides.sideproj]
+instance = "personal"
+```
+
+Within the file, layering is `project_overrides` > selected `[instance.*]` >
+top-level keys; flags and environment still beat all of them, and an explicit
+`--instance`/`PLANE_INSTANCE` disables any conflicting override routing.
+Unknown instance names fail fast with exit 2. `scripts/deploy.sh --instance
+NAME=ENVFILE ... --default NAME` generates this shape (one `key-NAME` file
+per instance) and verifies `plane --instance NAME me` for each.
 
 ## systemd usage
 
