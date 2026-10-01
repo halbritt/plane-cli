@@ -39,7 +39,9 @@ plane issue list -p MYPROJ --limit 50 --order-by -created_at
 plane issue list -p MYPROJ --state "In Progress" --priority high
 ```
 Filters are client-side (public API limitation); `meta.filtered` shows
-before/after counts. Resume capped lists with
+before/after counts. `--fields` only selects output columns: it never changes
+which issues match a filter, so `--state Backlog --fields id,name` and
+`--state Backlog` return the same issues. Resume capped lists with
 `--cursor "$(jq -r .meta.pagination.next_cursor)"`.
 
 ## 6. Search across the workspace

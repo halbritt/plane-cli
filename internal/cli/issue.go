@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -48,6 +49,11 @@ The public API has no server-side field filters, so --priority/--state/
 --label/--assignee filter client-side after fetching (state/label names are
 resolved to IDs first). meta.filtered reports before/after counts.
 
+Filters see complete records whatever --fields says: fields a filter reads
+(priority, state, labels, assignees) are requested from the server when
+--fields omits them, then dropped from the output, so --fields never changes
+which issues match.
+
 Examples:
   plane issue list -p DEPLOY
   plane issue list -p DEPLOY --priority high --state "In Progress"
@@ -67,6 +73,15 @@ Examples:
 			q := lf.query()
 			if orderBy != "" {
 				q.Set("order_by", orderBy)
+			}
+			// --fields is a server-side sparse fieldset. Ask for the fields the
+			// active filters read, and drop them from the output afterwards.
+			var filterOnly []string
+			if lf.fields != "" {
+				filterOnly = missingFields(lf.fields, filterFields(fPriority, fState, fLabel, fAssignee))
+				if len(filterOnly) > 0 {
+					q.Set("fields", strings.Join(append(splitFields(lf.fields), filterOnly...), ","))
+				}
 			}
 			results, meta, err := cl.ListAll(ctx, projPath(cfg, pid, "work-items"), q, lf.limit, lf.cursor)
 			if err != nil {
@@ -90,8 +105,15 @@ Examples:
 					return a.usageErr("--priority must be one of %s", strings.Join(priorities, ", "))
 				}
 				before := len(results)
-				results = filterIssues(results, fPriority, stateID, labelID, fAssignee)
+				if results, err = filterIssues(results, fPriority, stateID, labelID, fAssignee); err != nil {
+					return a.fail(err)
+				}
 				mOut["filtered"] = map[string]any{"before": before, "after": len(results), "client_side": true}
+				if len(filterOnly) > 0 {
+					if results, err = projectFields(results, splitFields(lf.fields)); err != nil {
+						return a.fail(err)
+					}
+				}
 			}
 			return a.success(results, mOut)
 		},
@@ -105,33 +127,185 @@ Examples:
 	return cmd
 }
 
-func filterIssues(results []json.RawMessage, priority, stateID, labelID, assigneeID string) []json.RawMessage {
+// filterFields lists the issue fields the active client-side filters read.
+func filterFields(priority, state, label, assignee string) []string {
+	var fields []string
+	for _, f := range []struct{ active, field string }{{priority, "priority"}, {state, "state"}, {label, "labels"}, {assignee, "assignees"}} {
+		if f.active != "" {
+			fields = append(fields, f.field)
+		}
+	}
+	return fields
+}
+
+// splitFields parses a comma-separated --fields value.
+func splitFields(fields string) []string {
+	var names []string
+	for _, name := range strings.Split(fields, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// missingFields returns the needed fields that the requested --fields omits.
+func missingFields(requested string, needed []string) []string {
+	have := splitFields(requested)
+	var missing []string
+	for _, field := range needed {
+		if !slices.Contains(have, field) {
+			missing = append(missing, field)
+		}
+	}
+	return missing
+}
+
+// refID is the ID of a relation the server returned either as a bare UUID or,
+// when expanded, as an object with an id.
+func refID(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return ""
+	}
+	switch raw[0] {
+	case '"':
+		var id string
+		if json.Unmarshal(raw, &id) == nil {
+			return id
+		}
+	case '{':
+		var object struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &object) == nil {
+			return object.ID
+		}
+	}
+	return ""
+}
+
+func refIDs(raw json.RawMessage) ([]string, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		if string(bytes.TrimSpace(raw)) == "null" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, refID(item))
+	}
+	return ids, nil
+}
+
+// filterIssues keeps the issues that match every active filter. A record the
+// filter cannot read is an error, never a silent non-match: a filter that quietly
+// drops issues reports an empty backlog as a fact.
+func filterIssues(results []json.RawMessage, priority, stateID, labelID, assigneeID string) ([]json.RawMessage, error) {
 	var kept []json.RawMessage
 	for _, raw := range results {
-		var v struct {
-			Priority  string   `json:"priority"`
-			State     string   `json:"state"`
-			Labels    []string `json:"labels"`
-			Assignees []string `json:"assignees"`
+		var record map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return nil, fmt.Errorf("cannot apply the filter: an issue record is not a JSON object")
 		}
-		if json.Unmarshal(raw, &v) != nil {
-			continue
+		field := func(flag, name string) (json.RawMessage, error) {
+			value, ok := record[name]
+			if !ok {
+				return nil, fmt.Errorf("cannot apply --%s: the server returned an issue without its %q field", flag, name)
+			}
+			return value, nil
 		}
-		if priority != "" && v.Priority != priority {
-			continue
+		if priority != "" {
+			value, err := field("priority", "priority")
+			if err != nil {
+				return nil, err
+			}
+			var have string
+			if json.Unmarshal(value, &have) != nil || have != priority {
+				continue
+			}
 		}
-		if stateID != "" && v.State != stateID {
-			continue
+		if stateID != "" {
+			value, err := field("state", "state")
+			if err != nil {
+				return nil, err
+			}
+			if refID(value) != stateID {
+				continue
+			}
 		}
-		if labelID != "" && !slices.Contains(v.Labels, labelID) {
-			continue
+		if labelID != "" {
+			value, err := field("label", "labels")
+			if err != nil {
+				return nil, err
+			}
+			ids, err := refIDs(value)
+			if err != nil {
+				return nil, fmt.Errorf("cannot apply --label: unexpected labels value: %w", err)
+			}
+			if !slices.Contains(ids, labelID) {
+				continue
+			}
 		}
-		if assigneeID != "" && !slices.Contains(v.Assignees, assigneeID) {
-			continue
+		if assigneeID != "" {
+			value, err := field("assignee", "assignees")
+			if err != nil {
+				return nil, err
+			}
+			ids, err := refIDs(value)
+			if err != nil {
+				return nil, fmt.Errorf("cannot apply --assignee: unexpected assignees value: %w", err)
+			}
+			if !slices.Contains(ids, assigneeID) {
+				continue
+			}
 		}
 		kept = append(kept, raw)
 	}
-	return kept
+	return kept, nil
+}
+
+// projectFields drops every top-level key not in keep, preserving the server's
+// key order and each value's exact bytes.
+func projectFields(records []json.RawMessage, keep []string) ([]json.RawMessage, error) {
+	if len(records) == 0 {
+		return records, nil
+	}
+	projected := make([]json.RawMessage, 0, len(records))
+	for _, raw := range records {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+			return nil, fmt.Errorf("cannot project fields: an issue record is not a JSON object")
+		}
+		var buf bytes.Buffer
+		buf.WriteByte('{')
+		for decoder.More() {
+			token, err := decoder.Token()
+			if err != nil {
+				return nil, fmt.Errorf("cannot project fields: %w", err)
+			}
+			key, _ := token.(string)
+			var value json.RawMessage
+			if err := decoder.Decode(&value); err != nil {
+				return nil, fmt.Errorf("cannot project fields: %w", err)
+			}
+			if !slices.Contains(keep, key) {
+				continue
+			}
+			if buf.Len() > 1 {
+				buf.WriteByte(',')
+			}
+			name, _ := json.Marshal(key)
+			buf.Write(name)
+			buf.WriteByte(':')
+			buf.Write(value)
+		}
+		buf.WriteByte('}')
+		projected = append(projected, json.RawMessage(buf.Bytes()))
+	}
+	return projected, nil
 }
 
 func newIssueGetCmd(a *App) *cobra.Command {
