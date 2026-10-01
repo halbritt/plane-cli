@@ -79,7 +79,7 @@ func (f *fakePlane) record(i int, issue fakeIssue, query url.Values) []byte {
 	if requested := query.Get("fields"); requested != "" {
 		keys = nil
 		for _, name := range strings.Split(requested, ",") {
-			if name = strings.TrimSpace(name); name != "" && !f.omit[name] {
+			if name != "" && !f.omit[name] {
 				keys = append(keys, name)
 			}
 		}
@@ -215,6 +215,7 @@ func TestIssueFilterMembershipDoesNotDependOnFields(t *testing.T) {
 	selections := []string{
 		"", "name", "name,id", "sequence_id,name,id", "name,sequence_id,priority", "name, id",
 		"name,state,priority,labels,assignees", "name,labels", "name,description_html",
+		"name, state, priority, labels, assignees",
 	}
 	for _, c := range filterCases {
 		for _, fields := range selections {

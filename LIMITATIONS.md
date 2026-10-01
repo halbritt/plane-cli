@@ -19,8 +19,8 @@ never falls back to it.
   projects this fetches everything first. `--fields` does not change which
   issues match: the fields a filter reads (`priority`, `state`, `labels`,
   `assignees`) are requested from the server when `--fields` omits them and
-  are dropped from the output afterwards. A record the filter cannot read is
-  an error, never a silent non-match; `--expand` relations are matched by id.
+  are dropped from the output afterwards. A missing field needed by a filter
+  is an error, never a silent non-match; `--expand` relations are matched by id.
 - **No issue-type ("Epic") endpoints.** Work-item types are visible as
   `type_id` on issues but cannot be listed/managed. Pass `--data
   '{"type_id":"<uuid>"}'` if you know the UUID from elsewhere.

@@ -78,8 +78,10 @@ Examples:
 			// active filters read, and drop them from the output afterwards.
 			var filterOnly []string
 			if lf.fields != "" {
-				filterOnly = missingFields(lf.fields, filterFields(fPriority, fState, fLabel, fAssignee))
-				if len(filterOnly) > 0 {
+				needed := filterFields(fPriority, fState, fLabel, fAssignee)
+				filterOnly = missingFields(lf.fields, needed)
+				if len(needed) > 0 {
+					// Plane does not trim names in a sparse fieldset.
 					q.Set("fields", strings.Join(append(splitFields(lf.fields), filterOnly...), ","))
 				}
 			}
@@ -200,9 +202,8 @@ func refIDs(raw json.RawMessage) ([]string, error) {
 	return ids, nil
 }
 
-// filterIssues keeps the issues that match every active filter. A record the
-// filter cannot read is an error, never a silent non-match: a filter that quietly
-// drops issues reports an empty backlog as a fact.
+// filterIssues keeps the issues that match every active filter. A missing field
+// required by a filter is an error rather than a silent non-match.
 func filterIssues(results []json.RawMessage, priority, stateID, labelID, assigneeID string) ([]json.RawMessage, error) {
 	var kept []json.RawMessage
 	for _, raw := range results {
