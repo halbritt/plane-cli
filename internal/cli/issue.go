@@ -407,6 +407,7 @@ func (a *App) buildIssueBody(ctx context.Context, cmd *cobra.Command, cl *client
 			return nil, err
 		}
 		fields["state"] = id
+		fields["state_id"] = id
 	}
 	if f.parent != "" {
 		id, _, err := a.resolveIssue(ctx, cl, cfg, f.parent)
@@ -414,6 +415,7 @@ func (a *App) buildIssueBody(ctx context.Context, cmd *cobra.Command, cl *client
 			return nil, err
 		}
 		fields["parent"] = id
+		fields["parent_id"] = id
 	}
 	if len(f.labels) > 0 {
 		ids := make([]string, 0, len(f.labels))

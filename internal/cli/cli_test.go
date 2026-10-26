@@ -566,3 +566,39 @@ func multipartReader(t *testing.T, body io.Reader, boundary string) *multipart.R
 	}
 	return multipart.NewReader(body, boundary)
 }
+
+// Plane accepts state/parent; Hangar makes those read-only and accepts *_id.
+// Both supported APIs ignore the other spelling, so send identical values.
+func TestIssueRelationshipFlagsSupportPlaneAndHangar(t *testing.T) {
+	const project = "11111111-1111-4111-8111-111111111111"
+	const state = "22222222-2222-4222-8222-222222222222"
+	const parent = "33333333-3333-4333-8333-333333333333"
+	const issue = "44444444-4444-4444-8444-444444444444"
+	for _, operation := range []string{"create", "update"} {
+		t.Run(operation, func(t *testing.T) {
+			var received map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+					t.Error(err)
+				}
+				writeJSON(w, http.StatusOK, received)
+			}))
+			defer srv.Close()
+			args := []string{"issue", operation}
+			if operation == "update" {
+				args = append(args, issue)
+			}
+			args = append(args, "--no-resolve", "-p", project, "--name", "child", "--state", state, "--parent", parent,
+				"--data", `{"state_id":"overridden","parent_id":"overridden"}`)
+			res := run(t, srv.URL, nil, "", args...)
+			if res.code != 0 {
+				t.Fatalf("exit=%d output=%s", res.code, res.stdout)
+			}
+			for key, want := range map[string]string{"state": state, "state_id": state, "parent": parent, "parent_id": parent} {
+				if received[key] != want {
+					t.Errorf("%s = %v, want %s", key, received[key], want)
+				}
+			}
+		})
+	}
+}
